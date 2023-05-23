@@ -5,10 +5,12 @@ import dask
 import numpy as np
 import pandas as pd
 import argparse
+from astropy.time import Time
 from dask.distributed import LocalCluster, Client
 from daskms import xds_from_ms, xds_from_table
 from bipp import measurement_set
 import bipp.statistics as vis
+
 
 #import dask
 #dask.config.set(scheduler='threads')
@@ -20,39 +22,52 @@ def print_ms_data(x):
     print(x.DATA.data)
     print(x.FLAG.data)
 
-def visibilities(x, channel_id, beam_id, all_vis):
-    print(x.TIME)
+def visibilities(x, **kwargs):
+    #t_vis = Time(x.TIME / 86400.0, format='mjd')
+    #t = t_vis.mjd
+    t = x.TIME / 86400.0
+    channel_ids = kwargs["channel_ids"]
+    beam_ids    = kwargs["beam_ids"]
+    freqs       = kwargs["freqs"]
+    #print(f"-D- t = {t}, channel_ids = {channel_ids}, beam_ids = {beam_ids}, freqs = {freqs}")
+
     beam_id_0 = x.ANTENNA1.data #sub_table.getcol("ANTENNA1")  # (N_entry,)
-    #print(x.ANTENNA2.data)
+    #print("-D- beam_id_0 =", beam_id_0, beam_id_0.dtype)
     beam_id_1 = x.ANTENNA2.data #sub_table.getcol("ANTENNA2")  # (N_entry,)
     data_flag = x.FLAG.data     #sub_table.getcol("FLAG")      # (N_entry, N_channel, 4)
     data = x.DATA.data          #sub_table.getcol(column)      # (N_entry, N_channel, 4)
-
+    
     # We only want XX and YY correlations
-    data = np.average(data[:, :, [0, 3]], axis=2)[:, channel_id]
-    data_flag = np.any(data_flag[:, :, [0, 3]], axis=2)[:, channel_id]
+    data = np.average(data[:, :, [0, 3]], axis=2)[:, channel_ids]
+    data_flag = np.any(data_flag[:, :, [0, 3]], axis=2)[:, channel_ids]
     
     # Set broken visibilities to 0
     data[data_flag] = 0
-            
+
+    
     # DataFrame description of visibility data.
     # Each column represents a different channel.
-    S_full_idx = pd.MultiIndex.from_arrays((beam_id_0, beam_id_1), names=("B_0", "B_1"))
+    
+    S_full_idx = pd.MultiIndex.from_arrays((beam_id_0.compute(), beam_id_1.compute()), names=("B_0", "B_1"))
     #print(data)
-    #print(channel_id)
+    #print(channel_ids)
     #print(S_full_idx)
-    S_full = pd.DataFrame(data=data, columns=channel_id, index=S_full_idx)
 
+    
+    S_full = pd.DataFrame(data=data.compute(), columns=channel_ids, index=S_full_idx)
+
+    
     # Drop rows of `S_full` corresponding to unwanted beams.
     #as arg# beam_id = np.unique(self.instrument._layout.index.get_level_values("STATION_ID"))
-    N_beam = len(beam_id)
+    N_beam = len(beam_ids)
     #print("-D-", N_beam)
-    #print("-D-", beam_id)
+    #print("-D-", beam_ids)
     i, j = np.triu_indices(N_beam, k=0)
-    wanted_index = pd.MultiIndex.from_arrays((beam_id[i], beam_id[j]), names=("B_0", "B_1"))
+    wanted_index = pd.MultiIndex.from_arrays((beam_ids[i], beam_ids[j]), names=("B_0", "B_1"))
     #print("-D- wanted_index =\n", wanted_index)
     index_to_drop = S_full_idx.difference(wanted_index)
     S_trunc = S_full.drop(index=index_to_drop)
+    
     
     # Depending on the dataset, some (ANTENNA1, ANTENNA2) pairs that have correlation=0 are
     # omitted in the table.
@@ -65,8 +80,8 @@ def visibilities(x, channel_id, beam_id, all_vis):
     #print("-D- N_diff =", N_diff)
     
     S_fill_in = pd.DataFrame(
-        data=np.zeros((N_diff, len(channel_id)), dtype=data.dtype),
-        columns=channel_id,
+        data=np.zeros((N_diff, len(channel_ids)), dtype=data.dtype),
+        columns=channel_ids,
         index=index_diff,
     )
 
@@ -76,13 +91,13 @@ def visibilities(x, channel_id, beam_id, all_vis):
 
     # Break S into columns and stream out
     vis_ = []
-    beam_idx = pd.Index(beam_id, name="BEAM_ID")
-    for ch_id in channel_id:
+    beam_idx = pd.Index(beam_ids, name="BEAM_ID")
+    for ch_id in channel_ids:
         v = measurement_set._series2array(S[ch_id].rename("S", inplace=True))
         visibility = vis.VisibilityMatrix(v, beam_idx)
-        vis_.append([t, freq[ch_id], visibility])
+        vis_.append([t, freqs[ch_id], visibility])
 
-    all_vis.append(vis)
+    return vis_
 
 
 def check_args(args):
@@ -105,18 +120,9 @@ def check_args(args):
 if __name__ == '__main__':
 
     args = check_args(sys.argv)
-    #sys.exit(0)
 
-    client = Client(n_workers=20, threads_per_worker=1)  # start distributed scheduler locally.
-    #cluster = LocalCluster()  # Launches a scheduler and workers locally
-    #client = Client(cluster)
+    channel_ids = [0]
 
-
-    #MS="/work/ska/orliac/RADIOBLOCKS/EOS_21cm-gf_202MHz_4h1d_1000.MS"   # 17 GB
-    #MS="/home/orliac/SKA/epfl-radio-astro/bipp-bench/gauss4_t201806301100_SBL180.MS"
-    #if not os.path.isdir(MS):
-    #    raise Exception(f"MS dataset {MS} not found.")
-    #    print(f"-I- MS: {MS}")
 
     # Instrument
     if args.ms_file == None:
@@ -130,48 +136,80 @@ if __name__ == '__main__':
     else:
         raise Exception(f"Unknown telescope {args.telescope}!")
 
-    beam_id = np.unique(ms.instrument._layout.index.get_level_values("STATION_ID"))
-    #print(beam_id)
+    beam_ids = np.unique(ms.instrument._layout.index.get_level_values("STATION_ID"))
+    print("-D- beam_id =\n", beam_ids)
+
+    freqs = np.array(ms.channels["FREQUENCY"].value)
+    print("-D- freqs =", freqs)
+
+    n_epochs = len(ms.time)
+    n_epochs = 10 #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    print("-I- n_epochs =", n_epochs)
+
+
+
+    # Run reference solution for first few epochs
+    # ===========================================
+    ts = time.time()
+    if 1 == 1:
+        stop = n_epochs
+        i = 0
+        ts_ = time.time()
+        for t, f, S in ms.visibilities(channel_id=channel_ids, time_id=slice(0, stop, 1), column="DATA"):
+            print(f"  ... {t} took {time.time()- ts_:.3f}")
+            if i < 2:
+                print(f"-D- Ref S[{i}] = {S}\n")
+            i += 1
+            ts_ = time.time()
+    te = time.time()
+    print(f"-I- reference implemenation took {te - ts:.3f} sec to process {n_epochs} epochs.")
+    #print(ms.time)
+   
+
+    # Run Dask solution on all epochs
+    # ===============================
+    print(f"-I- Will preprocess visibilities for {n_epochs} epochs with Dask.")
+    ts = time.time()
+
+    #client = Client(n_workers=20, threads_per_worker=1)
+    client = Client(n_workers=5, threads_per_worker=1)
+    print(client)
 
     print("-I- start working now...")
-    ts = time.time()
+    ts_ = time.time()
     columns=["TIME", "ANTENNA1", "ANTENNA2", "FLAG", "DATA"]
-    #datasets = xds_from_table(MS, chunks={'row': 100000}, columns=columns, group_cols=["TIME"])
-    datasets = xds_from_table(args.ms_file, chunks={'row': 100000}, columns=columns, group_cols=["TIME"])
+    datasets = xds_from_table(args.ms_file, chunks={'row': 100000}, columns=columns,
+                              group_cols=["TIME"], index_cols=["TIME", "ANTENNA1", "ANTENNA2"])
     te = time.time()
-    print(f"-I- dask-ms::xds_from_table took {te - ts:.3f} sec.")
+    print(f"-I- dask-ms::xds_from_table took {te - ts_:.3f} sec.")
 
     #print("datasets:\n", datasets)
     print(" ====================================================== ")
     print("-I- dataset[0] =\n", datasets[0]);
-    print(datasets[0].ANTENNA1.data)
+    #print(datasets[0].ANTENNA1.data)
     #print(dask.compute(datasets[0].ANTENNA1.data))
-    print(datasets[0].ANTENNA2.data)
+    #print(datasets[0].ANTENNA2.data)
     #print(dask.compute(datasets[0].ANTENNA2.data))
-    print(" -------------------------  ...  ---------------------- ")
-    print("-I- dataset[-1] =\n", datasets[-1]);
-    print(datasets[-1].ANTENNA1.data)
-    print(datasets[-1].ANTENNA2.data)
+    #print(" -------------------------  ...  ---------------------- ")
+    #print("-I- dataset[-1] =\n", datasets[-1]);
+    #print(datasets[-1].ANTENNA1.data)
+    #print(datasets[-1].ANTENNA2.data)
     print(" ====================================================== ")
-
-    #dask.compute([dask.delayed(print_ms_data)(x) for x in datasets])
-
-    ts = time.time()
-    channel_ids = [0]
-    all_vis = []
-    dask.compute([dask.delayed(visibilities)(x, channel_ids, beam_id, all_vis) for x in datasets])
-    #dask.compute([dask.delayed(visibilities)(x, channel_ids, beam_id) for x in (datasets[0], datasets[1])])
-    te = time.time()
-    print(f"-I- dask.compute(visibilities) took {te - ts:.3f} sec.")
-
-    print("-D- all_vis =\n", all_vis)
-
-    sys.exit(0)
-    for ds in datasets:
-        print(dask.compute(ds.DATA.data, ds.FLAG.data))
-
     
-    #ds = datasets[0]
+    ts_ = time.time()
 
-    #print("-I- Sleeping 3 minutes...")
-    #time.sleep(180)
+    X = []
+    for i in range(n_epochs):
+        X.append(datasets[i])
+
+    futures = client.map(visibilities, X, channel_ids=channel_ids, beam_ids = beam_ids, freqs = freqs)
+
+    res = client.gather(futures)
+
+    te = time.time()
+    print(f"-I- dask.compute(visibilities) took {te - ts_:.3f} sec to process {n_epochs} epochs.")
+    print(f"-I- Overall Dask computation took {te - ts:.3f} sec (setup + processing)")
+
+    #EO: To check visually, limit the processing to the first 2-3 epochs
+    print("-W- Order very likely wrong, check that. Just to get an impression.")
+    print("-D- res =\n", res[0], "\n", res[1])
