@@ -43,11 +43,9 @@ def visibilities(x, **kwargs):
     
     # Set broken visibilities to 0
     data[data_flag] = 0
-
     
     # DataFrame description of visibility data.
     # Each column represents a different channel.
-    
     S_full_idx = pd.MultiIndex.from_arrays((beam_id_0.compute(), beam_id_1.compute()), names=("B_0", "B_1"))
     #print(data)
     #print(channel_ids)
@@ -100,6 +98,7 @@ def visibilities(x, **kwargs):
     return vis_
 
 
+
 def check_args(args):
     print("-I- command line arguments =", args)
     parser = argparse.ArgumentParser(args)
@@ -137,13 +136,13 @@ if __name__ == '__main__':
         raise Exception(f"Unknown telescope {args.telescope}!")
 
     beam_ids = np.unique(ms.instrument._layout.index.get_level_values("STATION_ID"))
-    print("-D- beam_id =\n", beam_ids)
+    #print("-D- beam_id =\n", beam_ids)
 
     freqs = np.array(ms.channels["FREQUENCY"].value)
-    print("-D- freqs =", freqs)
+    #print("-D- freqs =", freqs)
 
     n_epochs = len(ms.time)
-    n_epochs = 10 #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    n_epochs = 30 #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     print("-I- n_epochs =", n_epochs)
 
 
@@ -151,7 +150,7 @@ if __name__ == '__main__':
     # Run reference solution for first few epochs
     # ===========================================
     ts = time.time()
-    if 1 == 1:
+    if 1 == 0:
         stop = n_epochs
         i = 0
         ts_ = time.time()
@@ -171,15 +170,11 @@ if __name__ == '__main__':
     print(f"-I- Will preprocess visibilities for {n_epochs} epochs with Dask.")
     ts = time.time()
 
-    #client = Client(n_workers=20, threads_per_worker=1)
-    client = Client(n_workers=5, threads_per_worker=1)
-    print(client)
-
-    print("-I- start working now...")
     ts_ = time.time()
     columns=["TIME", "ANTENNA1", "ANTENNA2", "FLAG", "DATA"]
-    datasets = xds_from_table(args.ms_file, chunks={'row': 100000}, columns=columns,
-                              group_cols=["TIME"], index_cols=["TIME", "ANTENNA1", "ANTENNA2"])
+    datasets = xds_from_table(args.ms_file, chunks={'row': 1000}, columns=columns,
+                              group_cols=["TIME"], index_cols=["TIME"])
+    #group_cols=["TIME"], index_cols=["TIME", "ANTENNA1", "ANTENNA2"])
     te = time.time()
     print(f"-I- dask-ms::xds_from_table took {te - ts_:.3f} sec.")
 
@@ -195,6 +190,14 @@ if __name__ == '__main__':
     #print(datasets[-1].ANTENNA1.data)
     #print(datasets[-1].ANTENNA2.data)
     print(" ====================================================== ")
+
+    ts_ = time.time()
+    #client = Client(n_workers=20, threads_per_worker=1)
+    client = Client(n_workers=10, threads_per_worker=1, local_directory="/tmp/dask-eo",
+                    timeout="30s")
+    print(f"-D- Setting up Dask cluster took {time.time() - ts_:.3f} sec.")
+    print(client)
+
     
     ts_ = time.time()
 
