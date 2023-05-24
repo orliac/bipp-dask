@@ -36,7 +36,7 @@ def visibilities(x, **kwargs):
     beam_id_1 = x.ANTENNA2.data #sub_table.getcol("ANTENNA2")  # (N_entry,)
     data_flag = x.FLAG.data     #sub_table.getcol("FLAG")      # (N_entry, N_channel, 4)
     data = x.DATA.data          #sub_table.getcol(column)      # (N_entry, N_channel, 4)
-    
+
     # We only want XX and YY correlations
     data = np.average(data[:, :, [0, 3]], axis=2)[:, channel_ids]
     data_flag = np.any(data_flag[:, :, [0, 3]], axis=2)[:, channel_ids]
@@ -46,15 +46,13 @@ def visibilities(x, **kwargs):
     
     # DataFrame description of visibility data.
     # Each column represents a different channel.
-    S_full_idx = pd.MultiIndex.from_arrays((beam_id_0.compute(), beam_id_1.compute()), names=("B_0", "B_1"))
-    #print(data)
-    #print(channel_ids)
-    #print(S_full_idx)
-
-    
-    S_full = pd.DataFrame(data=data.compute(), columns=channel_ids, index=S_full_idx)
-
-    
+    if 1 == 0:
+        S_full_idx = pd.MultiIndex.from_arrays((beam_id_0.compute(), beam_id_1.compute()), names=("B_0", "B_1"))
+        S_full = pd.DataFrame(data=data.compute(), columns=channel_ids, index=S_full_idx)
+    else:
+        S_full_idx = pd.MultiIndex.from_arrays((beam_id_0, beam_id_1), names=("B_0", "B_1"))
+        S_full = pd.DataFrame(data=data, columns=channel_ids, index=S_full_idx)
+  
     # Drop rows of `S_full` corresponding to unwanted beams.
     #as arg# beam_id = np.unique(self.instrument._layout.index.get_level_values("STATION_ID"))
     N_beam = len(beam_ids)
@@ -142,7 +140,7 @@ if __name__ == '__main__':
     #print("-D- freqs =", freqs)
 
     n_epochs = len(ms.time)
-    n_epochs = 30 #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    n_epochs = 60 #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     print("-I- n_epochs =", n_epochs)
 
 
@@ -172,7 +170,7 @@ if __name__ == '__main__':
 
     ts_ = time.time()
     columns=["TIME", "ANTENNA1", "ANTENNA2", "FLAG", "DATA"]
-    datasets = xds_from_table(args.ms_file, chunks={'row': 1000}, columns=columns,
+    datasets = xds_from_table(args.ms_file, chunks={'row': 140000}, columns=columns,
                               group_cols=["TIME"], index_cols=["TIME"])
     #group_cols=["TIME"], index_cols=["TIME", "ANTENNA1", "ANTENNA2"])
     te = time.time()
@@ -193,7 +191,8 @@ if __name__ == '__main__':
 
     ts_ = time.time()
     #client = Client(n_workers=20, threads_per_worker=1)
-    client = Client(n_workers=10, threads_per_worker=1, local_directory="/tmp/dask-eo",
+    client = Client(n_workers=10, threads_per_worker=1, memory_limit='18GB',
+                    local_directory="/tmp/dask-eo",
                     timeout="30s")
     print(f"-D- Setting up Dask cluster took {time.time() - ts_:.3f} sec.")
     print(client)
@@ -201,18 +200,28 @@ if __name__ == '__main__':
     
     ts_ = time.time()
 
+    """
     X = []
     for i in range(n_epochs):
         X.append(datasets[i])
-
     futures = client.map(visibilities, X, channel_ids=channel_ids, beam_ids = beam_ids, freqs = freqs)
-
     res = client.gather(futures)
+    """
 
+    futures = [dask.delayed(visibilities)(x, channel_ids=channel_ids, beam_ids = beam_ids, freqs = freqs) for x in datasets]
+    res = dask.compute(futures)
+    
     te = time.time()
     print(f"-I- dask.compute(visibilities) took {te - ts_:.3f} sec to process {n_epochs} epochs.")
     print(f"-I- Overall Dask computation took {te - ts:.3f} sec (setup + processing)")
 
+    print(len(res))
+    res = res[0]
+    print(res)
+
+    print("-I- Sleeping a bit...")
+    time.sleep(60)
+
     #EO: To check visually, limit the processing to the first 2-3 epochs
-    print("-W- Order very likely wrong, check that. Just to get an impression.")
-    print("-D- res =\n", res[0], "\n", res[1])
+    #print("-W- Order very likely wrong, check that. Just to get an impression.")
+    #print("-D- res =\n", res[0], "\n", res[1])
