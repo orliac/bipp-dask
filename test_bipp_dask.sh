@@ -15,16 +15,23 @@ source ${VENV_PATH}/bin/activate
 
 
 # Short example
-if [[ 1 == 1 ]]; then
+if [[ 1 == 0 ]]; then
     python ${SCRIPT_DIR}/bipp_dask.py \
         --ms_file /home/orliac/SKA/epfl-radio-astro/bipp-bench/gauss4_t201806301100_SBL180.MS \
         --telescope LOFAR
 fi
 
-# Long example
+# Medium example
 if [[ 1 == 1 ]]; then
     python ${SCRIPT_DIR}/bipp_dask.py \
-        --ms_file /work/ska/longobs_eor_skalow/EOS_21cm-gf_202MHz_4h1d_1000.MS \
+        --ms_file /work/ska/orliac/RADIOBLOCKS/EOS_21cm_202MHz_10min_1000.MS \
+        --telescope SKALOW
+fi
+
+# Long example
+if [[ 1 == 0 ]]; then
+    python ${SCRIPT_DIR}/bipp_dask.py \
+        --ms_file /work/ska/orliac/RADIOBLOCKS/EOS_21cm-gf_202MHz_4h1d_1000.MS \
         --telescope SKALOW
 fi
 
